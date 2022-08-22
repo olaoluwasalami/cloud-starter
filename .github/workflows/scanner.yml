@@ -15,18 +15,47 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
       ISSUE_BODY: ${{ github.event.issue.body }}
-    
+
     steps:
-      - name: Init
+      - name: Install trivy
         run: |
           sudo apt-get update
           sudo apt-get install -y wget apt-transport-https gnupg lsb-release
           wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
           echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee -a /etc/apt/sources.list.d/trivy.list
           sudo apt-get update
-
-      # TASK/TODO: 
+          sudo apt-get install trivy -y
+      # TASK/TODO:
       # Build this step in the workflow. Refer to the linked document in the README for more details
       - name: TODO - Scan Vulnerabilities
         run: echo "Build this step in the workflow. Refer to the linked document in the README for more details"
-      
+      - name: Run a script from Repo
+        run: |
+          result=()
+          mystring=${{ github.event.issue.body }}
+          images=$(echo $mystring | cut -d "[" -f2 | cut -d "]" -f1)
+          IFS="," read -a IMAGES <<< $images
+          json_result() {
+              if [ $1 -eq 0 ]; then
+                  # echo "$(jq -n --arg in "$2" --arg st "SAFE" '{image: $imag, status: $stat}')"
+                  echo "SAFE"
+              else
+                  # echo "$(jq -n --arg in "$2" --arg st "UNSAFE" '{image: $imag, status: $stat}')"
+                  echo "UNSAFE"
+              fi
+          }
+          for i in ${IMAGES[@]}
+          do
+              echo $i
+              value=$(trivy image --quiet --ignore-unfixed --severity HIGH,CRITICAL $i | grep -i "Total" | awk '{print $2}')
+              values=$(json_result $value)
+              result+=("$values")
+          done
+          result=$(jq -n --arg names "${IMAGES[*]}" --arg value "${result[*]}" '{"name": ($names / " "), "title": ($value / " ")}')
+          newResult=$(echo $result | jq '[.name, .title] | transpose | map( {image: .[0],status: .[1]})')
+          de=$(echo $newResult | sed "s/\"/'/g")
+          latestResult=$(jq -n --arg names "$de" '{"body": ($names)}')
+          echo $latestResult
+          echo $latestResult > result.json
+          cat result.json
+          curl -X POST -H "Accept: application/vnd.github+json" -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/yungdenzel/cloud-starter/issues/${{ github.event.issue.number }}/comments -g -d @result.json
